@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Minigames</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#12121c">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Minigames">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-180.png">
+<style>
+  :root { --bg:#12121c; --panel:#1e1e2c; --text:#e6e6ee; --dim:#8a8a9a; --accent:#ffdc28; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; -webkit-touch-callout: none; user-select: none; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--text);
+    font-family: -apple-system, system-ui, "Segoe UI", Roboto, sans-serif; overscroll-behavior: none; touch-action: none; }
+  body { display:flex; flex-direction:column; align-items:center;
+    padding: max(env(safe-area-inset-top), 8px) 8px max(env(safe-area-inset-bottom), 8px); }
+  header { width:100%; max-width:560px; display:flex; align-items:center; justify-content:space-between; padding:4px 4px 10px; }
+  header h1 { font-size:16px; letter-spacing:0.12em; margin:0; color:var(--dim); }
+  header button { background:var(--panel); color:var(--text); border:0; border-radius:10px; padding:8px 14px; font-size:14px; }
+  #menu { width:100%; max-width:560px; display:grid; gap:12px; margin-top:8vh; }
+  #menu button { background:var(--panel); color:var(--text); border:0; border-radius:16px; padding:22px; font-size:22px;
+    letter-spacing:0.1em; text-align:left; display:flex; justify-content:space-between; align-items:center; }
+  #menu button span { color:var(--dim); font-size:13px; letter-spacing:0; }
+  #menu button:active { background:#2c2c3e; }
+  #game { display:none; flex-direction:column; align-items:center; width:100%; }
+  canvas { image-rendering: pixelated; image-rendering: crisp-edges; background:#000; border-radius:6px; }
+  #controls { width:100%; max-width:560px; display:flex; justify-content:space-between; align-items:center; margin-top:18px; padding:0 6px; }
+  .dpad { display:grid; grid-template-columns:repeat(3,64px); grid-template-rows:repeat(3,64px); gap:4px; }
+  .dpad .btn { border-radius:12px; }
+  .dpad .up { grid-column:2; grid-row:1; } .dpad .left { grid-column:1; grid-row:2; }
+  .dpad .right { grid-column:3; grid-row:2; } .dpad .down { grid-column:2; grid-row:3; }
+  .btn { background:var(--panel); color:var(--text); display:flex; align-items:center; justify-content:center;
+    font-size:22px; font-weight:600; border:0; }
+  .btn.held { background:#3a3a52; }
+  .ab { display:flex; gap:16px; align-items:center; }
+  .ab .btn { width:78px; height:78px; border-radius:50%; font-size:26px; }
+  .ab .a { background:#2a3a2a; } .ab .b { background:#3a2a2a; }
+  .ab .a.held { background:#4a6a4a; } .ab .b.held { background:#6a4a4a; }
+  #hint { color:var(--dim); font-size:12px; margin-top:14px; text-align:center; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">MINIGAMES</h1>
+  <button id="back" style="visibility:hidden">Menu</button>
+</header>
+
+<div id="menu"></div>
+
+<div id="game">
+  <canvas id="screen" width="160" height="128"></canvas>
+  <div id="controls">
+    <div class="dpad">
+      <div class="btn up" data-btn="1">&#9650;</div>
+      <div class="btn left" data-btn="4">&#9664;</div>
+      <div class="btn right" data-btn="8">&#9654;</div>
+      <div class="btn down" data-btn="2">&#9660;</div>
+    </div>
+    <div class="ab">
+      <div class="btn b" data-btn="32">B</div>
+      <div class="btn a" data-btn="16">A</div>
+    </div>
+  </div>
+  <div id="hint">Keyboard: arrows, Z = A, X = B, Esc = menu. Swipe the screen for directions.</div>
+</div>
+
+<script src="gfx.js"></script>
+<script src="common.js"></script>
+<script src="words.js"></script>
+<script src="match3.js"></script>
+<script src="tetris.js"></script>
+<script src="g2048.js"></script>
+<script src="wordle.js"></script>
+<script>
+(function () {
+  const ORDER = [
+    ['match3', 'Match 3', 'swap candies, 30 moves'],
+    ['tetris', 'Tetris', 'top 5 scoreboard'],
+    ['g2048', '2048', 'resumes where you left off'],
+    ['wordle', 'Wordle', 'on-screen keyboard'],
+  ];
+  const $ = (id) => document.getElementById(id);
+  const canvas = $('screen'), ctx = canvas.getContext('2d');
+  const img = ctx.createImageData(GFX.W, GFX.H);
+  const px32 = new Uint32Array(img.data.buffer);
+  const fb = GFX.fb;
+
+  /* RGB565 -> RGBA8888 lookup, built once (little-endian ABGR in the Uint32 view) */
+  const LUT = new Uint32Array(65536);
+  for (let p = 0; p < 65536; p++) {
+    const r = (p >> 11) << 3, g = ((p >> 5) & 63) << 2, b = (p & 31) << 3;
+    LUT[p] = (255 << 24) | (b << 16) | (g << 8) | r;
+  }
+  function blit() {
+    for (let i = 0; i < fb.length; i++) px32[i] = LUT[fb[i]];
+    ctx.putImageData(img, 0, 0);
+  }
+
+  /* ---------- sizing: integer scale that fits the viewport width ---------- */
+  function fit() {
+    /* integer scale in *device* pixels so it stays crisp on 2x/3x phone screens */
+    const dpr = window.devicePixelRatio || 1;
+    const maxW = Math.min(window.innerWidth - 16, 560) * dpr;
+    const maxH = window.innerHeight * 0.5 * dpr;
+    const scale = Math.max(1, Math.floor(Math.min(maxW / GFX.W, maxH / GFX.H)));
+    canvas.style.width = (GFX.W * scale / dpr) + 'px';
+    canvas.style.height = (GFX.H * scale / dpr) + 'px';
+  }
+  window.addEventListener('resize', fit);
+
+  /* ---------- input ---------- */
+  let held = 0;                     // from on-screen buttons and keyboard
+  let swipeQueue = [];              // one-tick presses from swipes
+  const pointers = new Map();       // pointerId -> button bit
+  document.querySelectorAll('.btn').forEach((el) => {
+    const bit = Number(el.dataset.btn);
+    const down = (e) => { e.preventDefault(); pointers.set(e.pointerId, bit); held |= bit; el.classList.add('held');
+      if (navigator.vibrate) navigator.vibrate(8); el.setPointerCapture && el.setPointerCapture(e.pointerId); };
+    const up = (e) => { if (!pointers.has(e.pointerId)) return; pointers.delete(e.pointerId); held &= ~bit; el.classList.remove('held'); };
+    el.addEventListener('pointerdown', down);
+    el.addEventListener('pointerup', up);
+    el.addEventListener('pointercancel', up);
+    el.addEventListener('lostpointercapture', up);
+    el.addEventListener('contextmenu', (e) => e.preventDefault());
+  });
+  const KEYS = { ArrowUp: 1, ArrowDown: 2, ArrowLeft: 4, ArrowRight: 8, KeyZ: 16, KeyX: 32, Space: 16, Enter: 16, Backspace: 32 };
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'Escape') { showMenu(); return; }
+    if (KEYS[e.code]) { held |= KEYS[e.code]; e.preventDefault(); }
+  });
+  window.addEventListener('keyup', (e) => { if (KEYS[e.code]) held &= ~KEYS[e.code]; });
+  window.addEventListener('blur', () => { held = 0; });
+
+  /* swipes on the canvas -> a one-tick direction press */
+  let swipeStart = null;
+  canvas.addEventListener('pointerdown', (e) => { swipeStart = [e.clientX, e.clientY]; e.preventDefault(); });
+  canvas.addEventListener('pointerup', (e) => {
+    if (!swipeStart) return;
+    const dx = e.clientX - swipeStart[0], dy = e.clientY - swipeStart[1];
+    swipeStart = null;
+    if (Math.max(Math.abs(dx), Math.abs(dy)) < 24) return;
+    swipeQueue.push(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 8 : 4) : (dy > 0 ? 2 : 1));
+  });
+
+  /* ---------- saves ---------- */
+  const storeKey = (name) => 'minigames.' + name;
+  function loadSave(name) {
+    try { const s = localStorage.getItem(storeKey(name)); return s ? JSON.parse(s) : null; } catch (e) { return null; }
+  }
+  function saver(name) {
+    return (obj) => { try { localStorage.setItem(storeKey(name), JSON.stringify(obj)); } catch (e) { /* private mode etc. */ } };
+  }
+
+  /* ---------- game loop ---------- */
+  let current = null, raf = 0, acc = 0, last = 0;
+  const TICK = 33;
+  function frame(now) {
+    if (!current) return;
+    raf = requestAnimationFrame(frame);
+    acc += Math.min(now - last, 200);   // cap so a backgrounded tab doesn't fast-forward
+    last = now;
+    let ticked = false;
+    while (acc >= TICK) {
+      acc -= TICK;
+      let mask = held;
+      if (swipeQueue.length) mask |= swipeQueue.shift();
+      current.tick(mask);
+      ticked = true;
+    }
+    if (ticked) { current.draw(); blit(); }
+  }
+
+  function startGame(name) {
+    const G = GAMES[name];
+    G.init((Date.now() ^ (Math.random() * 0xFFFFFFFF)) >>> 0);
+    G.setSave(loadSave(name), saver(name));
+    G.setButtonNames('A', 'B');
+    current = G;
+    $('title').textContent = G.title;
+    $('back').style.visibility = 'visible';
+    $('menu').style.display = 'none';
+    $('game').style.display = 'flex';
+    held = 0; swipeQueue = []; acc = 0; last = performance.now();
+    fit();
+    G.draw(); blit();
+    cancelAnimationFrame(raf);
+    raf = requestAnimationFrame(frame);
+  }
+  function showMenu() {
+    current = null;
+    cancelAnimationFrame(raf);
+    $('title').textContent = 'MINIGAMES';
+    $('back').style.visibility = 'hidden';
+    $('game').style.display = 'none';
+    $('menu').style.display = 'grid';
+  }
+  $('back').addEventListener('click', showMenu);
+
+  for (const [name, label, sub] of ORDER) {
+    const b = document.createElement('button');
+    b.innerHTML = label + '<span>' + sub + '</span>';
+    b.addEventListener('click', () => startGame(name));
+    $('menu').appendChild(b);
+  }
+
+  /* offline support; only works over https or localhost, silently skipped on file:// */
+  if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  }
+})();
+</script>
+</body>
+</html>
